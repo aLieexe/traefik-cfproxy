@@ -1,8 +1,9 @@
+
 services:
   traefik:
-    image: traefik:3.5.3
-    restart: always
     container_name: traefik
+    image: traefik:v3.6
+    restart: always
     command:
       - "--api.dashboard=true"
       - "--api.debug=true"
@@ -11,27 +12,54 @@ services:
       - "--entrypoints.web.address=:80"
       - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
       - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.forwardedHeaders.insecure=true"
       - "--entrypoints.websecure.address=:443"
       - "--certificatesresolvers.mytlschallenge.acme.httpchallenge=true"
       - "--certificatesresolvers.mytlschallenge.acme.httpchallenge.entrypoint=web"
       - "--certificatesresolvers.mytlschallenge.acme.email=${SSL_EMAIL}"
       - "--certificatesresolvers.mytlschallenge.acme.storage=/letsencrypt/acme.json"
+
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - traefik_data:/letsencrypt
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - traefik_network
+
+  jenkins:
+    container_name: jenkins
+    image: jenkins/jenkins:lts
+    restart: always
+    privileged: true
+    user: root
+    expose:
+      - "8080"
+      - "50000"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+    # environment:
+      # - JAVA_OPTS=-Djenkins.install.runSetupWizard=false
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.jenkins.rule=Host(`${JENKINS_SUBDOMAIN}.${DOMAIN_NAME}`)"
+      - "traefik.http.routers.jenkins.entrypoints=websecure"
+      - "traefik.http.routers.jenkins.tls.certresolver=mytlschallenge"
+      - "traefik.http.services.jenkins.loadbalancer.server.port=8080"
+    networks:
+      - traefik_network
 
   n8n:
     image: docker.n8n.io/n8nio/n8n:1.115.2
     restart: always
     container_name: n8n
     ports:
-      - "127.0.0.1:5678:5678"
+      - "5678"
     labels:
       - traefik.enable=true
-      - traefik.http.routers.n8n.rule=Host(`${SUBDOMAIN}.${DOMAIN_NAME}`)
+      - traefik.http.routers.n8n.rule=Host(`${N8N_SUBDOMAIN}.${DOMAIN_NAME}`)
       - traefik.http.routers.n8n.tls=true
       - traefik.http.routers.n8n.entrypoints=web,websecure
       - traefik.http.routers.n8n.tls.certresolver=mytlschallenge
@@ -46,18 +74,28 @@ services:
       - traefik.http.routers.n8n.middlewares=n8n@docker
     environment:
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
-      - N8N_HOST=${SUBDOMAIN}.${DOMAIN_NAME}
+      - N8N_HOST=${N8N_SUBDOMAIN}.${DOMAIN_NAME}
       - N8N_PORT=5678
       - N8N_PROTOCOL=https
       - N8N_RUNNERS_ENABLED=true
       - NODE_ENV=production
-      - WEBHOOK_URL=https://${SUBDOMAIN}.${DOMAIN_NAME}/
+      - WEBHOOK_URL=https://${N8N_SUBDOMAIN}.${DOMAIN_NAME}/
       - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
       - TZ=${GENERIC_TIMEZONE}
     volumes:
       - n8n_data:/home/node/.n8n
       - ./local-files:/files
+    networks:
+      - traefik_network
 
 volumes:
-  n8n_data:
   traefik_data:
+    driver: local
+  jenkins_home:
+    driver: local
+  n8n_data: 
+
+networks:
+  traefik_network:
+    driver: bridge
+    enable_ipv6: true
